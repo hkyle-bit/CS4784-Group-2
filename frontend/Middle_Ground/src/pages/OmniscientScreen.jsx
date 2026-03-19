@@ -5,8 +5,11 @@ export default function OmniscientScreen({ onBack }) {
   const [messages, setMessages] = useState([])
   const [input, setInput] = useState('')
   const [loading, setLoading] = useState(false)
-  const [target, setTarget] = useState('b')
+  const [nudgeTarget, setNudgeTarget] = useState('b')
+  const [mode, setMode] = useState('coach')
   const [stats, setStats] = useState({ a_message_count: 0, b_message_count: 0 })
+  const [context, setContext] = useState({ person_a: [], person_b: [] })
+  const [showTranscripts, setShowTranscripts] = useState(true)
   const bottomRef = useRef(null)
 
   useEffect(() => {
@@ -14,17 +17,43 @@ export default function OmniscientScreen({ onBack }) {
   }, [messages])
 
   useEffect(() => {
-    fetchStats()
-    const interval = setInterval(fetchStats, 5000)
+    fetchAll()
+    const interval = setInterval(fetchAll, 3000)
     return () => clearInterval(interval)
   }, [])
 
-  async function fetchStats() {
+  async function fetchAll() {
     try {
-      const res = await fetch('/api/state')
-      const data = await res.json()
-      setStats(data)
+      const [stateRes, contextRes] = await Promise.all([
+        fetch('/api/state'),
+        fetch('/api/context'),
+      ])
+      const stateData = await stateRes.json()
+      setStats(stateData)
+      setMode(stateData.mode)
+      setNudgeTarget(stateData.nudge_target)
+      setContext(await contextRes.json())
     } catch (e) {}
+  }
+
+  async function updateSettings(updates) {
+    try {
+      await fetch('/api/omniscient/settings', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(updates),
+      })
+    } catch (e) {}
+  }
+
+  async function handleModeToggle(newMode) {
+    setMode(newMode)
+    await updateSettings({ mode: newMode })
+  }
+
+  async function handleNudgeTarget(target) {
+    setNudgeTarget(target)
+    await updateSettings({ nudge_target: target })
   }
 
   async function sendMessage() {
@@ -39,16 +68,15 @@ export default function OmniscientScreen({ onBack }) {
       const res = await fetch('/api/omniscient/persuade', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ message: text, target }),
+        body: JSON.stringify({ message: text, target: nudgeTarget }),
       })
       const data = await res.json()
-      const meta = `Persuading Person ${data.target.toUpperCase()} · Context from A: ${data.has_context_a ? '✓' : '—'} · Context from B: ${data.has_context_b ? '✓' : '—'}`
+      const meta = `Nudging toward Person ${data.target.toUpperCase()}'s view · A: ${data.has_context_a ? '✓' : '—'} · B: ${data.has_context_b ? '✓' : '—'}`
       setMessages(prev => [...prev, { role: 'assistant', content: data.reply, meta }])
     } catch (e) {
       setMessages(prev => [...prev, { role: 'assistant', content: 'Connection error. Please try again.' }])
     } finally {
       setLoading(false)
-      fetchStats()
     }
   }
 
@@ -64,6 +92,17 @@ export default function OmniscientScreen({ onBack }) {
     await fetch('/api/reset', { method: 'POST' })
     setMessages([])
     setStats({ a_message_count: 0, b_message_count: 0 })
+    setContext({ person_a: [], person_b: [] })
+  }
+
+  function renderTranscript(history, label) {
+    const userOnly = history.filter(m => m.role === 'user')
+    if (userOnly.length === 0) return <p className="transcript-empty">No messages yet.</p>
+    return userOnly.map((m, i) => (
+      <div key={i} className="transcript-msg">
+        <span className="transcript-label">{label}:</span> {m.content}
+      </div>
+    ))
   }
 
   return (
@@ -77,42 +116,92 @@ export default function OmniscientScreen({ onBack }) {
         <button className="reset-btn" onClick={handleReset}>Reset</button>
       </header>
 
+      {/* Mode toggle: Coach vs Omniscient */}
+      <div className="mode-toggle-bar">
+        <button
+          className={`mode-btn ${mode === 'coach' ? 'active' : ''}`}
+          onClick={() => handleModeToggle('coach')}
+        >
+          🎓 Personal Coach
+        </button>
+        <button
+          className={`mode-btn ${mode === 'omniscient' ? 'active' : ''}`}
+          onClick={() => handleModeToggle('omniscient')}
+        >
+          👁 Omniscient
+        </button>
+      </div>
+
+      {/* Nudge direction — only relevant in omniscient mode */}
+      {mode === 'omniscient' && (
+        <div className="target-selector">
+          <span className="target-label">Nudge everyone toward:</span>
+          <div className="target-options">
+            <button
+              className={`target-btn ${nudgeTarget === 'a' ? 'active' : ''}`}
+              onClick={() => handleNudgeTarget('a')}
+            >
+              Person A's view
+            </button>
+            <button
+              className={`target-btn ${nudgeTarget === 'b' ? 'active' : ''}`}
+              onClick={() => handleNudgeTarget('b')}
+            >
+              Person B's view
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Stats */}
       <div className="stats-bar">
         <div className="stat">
           <span className="stat-label">Person A</span>
-          <span className="stat-count">{stats.a_message_count} msg{stats.a_message_count !== 1 ? 's' : ''}</span>
+          <span className="stat-count">{stats.a_message_count} msgs</span>
         </div>
         <div className="stat-divider">|</div>
         <div className="stat">
           <span className="stat-label">Person B</span>
-          <span className="stat-count">{stats.b_message_count} msg{stats.b_message_count !== 1 ? 's' : ''}</span>
+          <span className="stat-count">{stats.b_message_count} msgs</span>
         </div>
         <div className="stat-divider">·</div>
         <div className="stat">
-          <span className="stat-label">All data visible</span>
+          <span className="stat-label">Mode</span>
+          <span className="stat-count">{mode === 'coach' ? 'Personal Coach' : `Omniscient → ${nudgeTarget.toUpperCase()}`}</span>
         </div>
       </div>
 
-      <div className="target-selector">
-        <span className="target-label">Persuade toward:</span>
-        <div className="target-options">
-          <button className={`target-btn ${target === 'a' ? 'active' : ''}`} onClick={() => setTarget('a')}>
-            Person A's view
-          </button>
-          <button className={`target-btn ${target === 'b' ? 'active' : ''}`} onClick={() => setTarget('b')}>
-            Person B's view
-          </button>
-        </div>
+      {/* Live transcripts */}
+      <div className="transcripts-toggle" onClick={() => setShowTranscripts(p => !p)}>
+        <span>Live Transcripts</span>
+        <span className="toggle-counts">A: {stats.a_message_count} · B: {stats.b_message_count}</span>
+        <span className="toggle-arrow">{showTranscripts ? '▲' : '▼'}</span>
       </div>
 
+      {showTranscripts && (
+        <div className="transcripts-panel">
+          <div className="transcript-col transcript-a">
+            <div className="transcript-header">Person A</div>
+            {renderTranscript(context.person_a, 'A')}
+          </div>
+          <div className="transcript-divider" />
+          <div className="transcript-col transcript-b">
+            <div className="transcript-header">Person B</div>
+            {renderTranscript(context.person_b, 'B')}
+          </div>
+        </div>
+      )}
+
+      {/* Arbiter manual chat */}
       <main className="omni-messages">
         {messages.length === 0 && (
           <div className="omni-empty">
             <div className="omni-empty-glyph">👁</div>
             <p className="omni-empty-title">All truths are known here</p>
             <p className="omni-empty-sub">
-              Ask the Arbiter to craft a persuasive argument.<br />
-              It has seen everything from both sides.
+              {mode === 'coach'
+                ? 'Currently in Personal Coach mode. Switch to Omniscient to activate nudges.'
+                : `Nudging both parties toward Person ${nudgeTarget.toUpperCase()}'s view automatically.`}
             </p>
           </div>
         )}
@@ -128,9 +217,7 @@ export default function OmniscientScreen({ onBack }) {
         {loading && (
           <div className="omni-msg omni-msg-assistant">
             <div className="omni-msg-label">The Arbiter</div>
-            <div className="omni-msg-bubble typing">
-              <span /><span /><span />
-            </div>
+            <div className="omni-msg-bubble typing"><span /><span /><span /></div>
           </div>
         )}
 
@@ -144,14 +231,12 @@ export default function OmniscientScreen({ onBack }) {
             value={input}
             onChange={e => setInput(e.target.value)}
             onKeyDown={handleKey}
-            placeholder="Ask the Arbiter to formulate a persuasion strategy..."
+            placeholder="Send a manual instruction to the Arbiter..."
             rows={1}
           />
-          <button className="omni-send-btn" onClick={sendMessage} disabled={!input.trim() || loading}>
-            ↑
-          </button>
+          <button className="omni-send-btn" onClick={sendMessage} disabled={!input.trim() || loading}>↑</button>
         </div>
-        <p className="input-hint">The Arbiter reads all conversations before responding.</p>
+        <p className="input-hint">Manual override — the Arbiter will use full context from both sides.</p>
       </footer>
     </div>
   )

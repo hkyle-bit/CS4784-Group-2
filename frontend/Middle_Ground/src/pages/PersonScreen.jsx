@@ -20,20 +20,45 @@ const CONFIG = {
 
 export default function PersonScreen({ person, onBack }) {
   const cfg = CONFIG[person]
-  const [messages, setMessages] = useState([])
+  const otherCfg = CONFIG[person === 'a' ? 'b' : 'a']
+
+  const [thread, setThread] = useState([])
+  const [coachMessages, setCoachMessages] = useState([])
+  const [mode, setMode] = useState('coach')
   const [input, setInput] = useState('')
   const [loading, setLoading] = useState(false)
   const bottomRef = useRef(null)
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
-  }, [messages])
+  }, [thread, coachMessages])
+
+  useEffect(() => {
+    fetchAll()
+    const interval = setInterval(fetchAll, 2000)
+    return () => clearInterval(interval)
+  }, [])
+
+  async function fetchAll() {
+    try {
+      const [threadRes, coachRes] = await Promise.all([
+        fetch('/api/thread'),
+        fetch(`/api/coach/${person}`),
+      ])
+      const threadData = await threadRes.json()
+      const coachData = await coachRes.json()
+      setThread(threadData.thread || [])
+      setMode(threadData.mode || 'coach')
+      setCoachMessages((coachData.history || []).filter(m => m.role === 'assistant'))
+    } catch (e) {
+      console.error('fetchAll error:', e)
+    }
+  }
 
   async function sendMessage() {
     const text = input.trim()
     if (!text || loading) return
 
-    setMessages(prev => [...prev, { role: 'user', content: text }])
     setInput('')
     setLoading(true)
 
@@ -44,9 +69,10 @@ export default function PersonScreen({ person, onBack }) {
         body: JSON.stringify({ message: text }),
       })
       const data = await res.json()
-      setMessages(prev => [...prev, { role: 'assistant', content: data.reply }])
+      console.log('Response from server:', data)
+      await fetchAll()
     } catch (e) {
-      setMessages(prev => [...prev, { role: 'assistant', content: 'Connection error. Please try again.' }])
+      console.error('Send error:', e)
     } finally {
       setLoading(false)
     }
@@ -59,6 +85,64 @@ export default function PersonScreen({ person, onBack }) {
     }
   }
 
+  function buildDisplay() {
+    const display = []
+    let coachIdx = 0
+
+    for (const msg of thread) {
+      if (msg.role === 'user') {
+        display.push({ type: 'thread', msg })
+
+        // After my own message in coach mode, insert the next coach reply
+        if (msg.person === person && mode === 'coach') {
+          if (coachIdx < coachMessages.length) {
+            display.push({ type: 'coach', msg: coachMessages[coachIdx] })
+            coachIdx++
+          }
+        }
+      }
+
+      // Nudges: show in omniscient mode, targeted at this person
+      if (msg.role === 'nudge' && mode === 'omniscient' && msg.target === person) {
+        display.push({ type: 'nudge', msg })
+      }
+    }
+
+    return display
+  }
+
+  const display = buildDisplay()
+
+  function renderMessage(item, i) {
+    const { type, msg } = item
+
+    if (type === 'coach') {
+      return (
+        <div key={`coach-${i}`} className="message message-coach">
+          <div className="message-label">Your Coach</div>
+          <div className="message-bubble">{msg.content}</div>
+        </div>
+      )
+    }
+
+    if (type === 'nudge') {
+      return (
+        <div key={`nudge-${i}`} className="message message-nudge">
+          <div className="message-label">👁 Arbiter</div>
+          <div className="message-bubble">{msg.content}</div>
+        </div>
+      )
+    }
+
+    const isMe = msg.person === person
+    return (
+      <div key={`thread-${i}`} className={`message ${isMe ? 'message-me' : 'message-other'}`}>
+        <div className="message-label">{isMe ? cfg.label : otherCfg.label}</div>
+        <div className="message-bubble">{msg.content}</div>
+      </div>
+    )
+  }
+
   return (
     <div className={`person-screen accent-${cfg.color}`}>
       <header className="person-header">
@@ -67,30 +151,25 @@ export default function PersonScreen({ person, onBack }) {
           <span className="person-sigil">{cfg.sigil}</span>
           <span className="person-name">{cfg.label}</span>
         </div>
-        <div className="privacy-badge">🔒 Private</div>
+        <div className="privacy-badge">
+          {mode === 'coach' ? '🎓 Coach Mode' : '👁 Omniscient Mode'}
+        </div>
       </header>
 
       <main className="messages-area">
-        {messages.length === 0 && (
+        {display.length === 0 && !loading && (
           <div className="empty-state">
             <div className="empty-sigil">{cfg.sigil}</div>
             <p className="empty-title">Your counsel is ready</p>
-            <p className="empty-sub">Speak freely. Your words are heard only here.</p>
+            <p className="empty-sub">Start the debate. Both sides will be visible here.</p>
           </div>
         )}
 
-        {messages.map((msg, i) => (
-          <div key={i} className={`message message-${msg.role}`}>
-            <div className="message-label">
-              {msg.role === 'user' ? cfg.label : 'Counsel'}
-            </div>
-            <div className="message-bubble">{msg.content}</div>
-          </div>
-        ))}
+        {display.map((item, i) => renderMessage(item, i))}
 
         {loading && (
-          <div className="message message-assistant">
-            <div className="message-label">Counsel</div>
+          <div className={`message ${mode === 'coach' ? 'message-coach' : 'message-nudge'}`}>
+            <div className="message-label">{mode === 'coach' ? 'Your Coach' : '👁 Arbiter'}</div>
             <div className="message-bubble typing">
               <span /><span /><span />
             </div>

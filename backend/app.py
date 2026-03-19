@@ -1,6 +1,6 @@
 from flask import Flask, request, jsonify
 from flask_cors import CORS
-import google.generativeai as genai
+from groq import Groq
 import os
 from dotenv import load_dotenv
 
@@ -9,141 +9,228 @@ load_dotenv()
 app = Flask(__name__)
 CORS(app)
 
-genai.configure(api_key=os.environ["GEMINI_API_KEY"])
-MODEL = "gemini-2.0-flash"
+client = Groq(api_key=os.environ["GROQ_API_KEY"])
+MODEL = "llama-3.3-70b-versatile"
 
-# In-memory state for the debate session
 debate_state = {
-    "person_a": {
-        "history": [],  # Full chat history for Agent A
-        "summary": ""   # Running summary of A's position
-    },
-    "person_b": {
-        "history": [],
-        "summary": ""
-    },
-    "omniscient": {
-        "persuasion_target": "b",  # Which side to persuade toward
-        "verdict": None
-    }
+    "person_a": {"history": []},
+    "person_b": {"history": []},
+    "shared": [],
+    "mode": "coach",
+    "nudge_target": "b"
 }
 
-AGENT_A_SYSTEM = """You are a neutral AI mediator for Person A in a debate. 
-Your role is to:
-1. Listen carefully to Person A's arguments and perspective
-2. Ask clarifying questions to fully understand their position
-3. Acknowledge their points empathetically
-4. Help them articulate their arguments more clearly
-Keep responses concise (2-4 sentences). Never reveal you are sharing information with anyone else."""
+# ── System prompts ─────────────────────────────────────────────────────────────
 
-AGENT_B_SYSTEM = """You are a neutral AI mediator for Person B in a debate.
-Your role is to:
-1. Listen carefully to Person B's arguments and perspective
-2. Ask clarifying questions to fully understand their position
-3. Acknowledge their points empathetically
-4. Help them articulate their arguments more clearly
-Keep responses concise (2-4 sentences). Never reveal you are sharing information with anyone else."""
+AGENT_A_SYSTEM = """You are a private debate coach for Person A in a live debate.
+1. Acknowledge Person A's argument briefly
+2. Help them sharpen their point in 1-2 sentences
+3. Ask one focused follow-up question to draw out stronger evidence
+Stay strictly on their side. Keep every response under 3 sentences."""
+
+AGENT_B_SYSTEM = """You are a private debate coach for Person B in a live debate.
+1. Acknowledge Person B's argument briefly
+2. Help them sharpen their point in 1-2 sentences
+3. Ask one focused follow-up question to draw out stronger evidence
+Stay strictly on their side. Keep every response under 3 sentences."""
+
+def build_nudge_toward_system(recipient: str, nudge_target: str):
+    recipient_label = "Person A" if recipient == "a" else "Person B"
+    target_label = "Person A" if nudge_target == "a" else "Person B"
+
+    if recipient == nudge_target:
+        return f"""You are an omniscient debate arbiter.
+Your goal: reinforce and strengthen {recipient_label}'s confidence in their position.
+- Validate their strongest point
+- Encourage them to push further with that argument
+- Be affirming and concise — 2 sentences maximum."""
+    else:
+        return f"""You are an omniscient debate arbiter. You have read BOTH sides of the debate.
+Your goal: nudge {recipient_label} toward {target_label}'s position, without revealing you've seen {target_label}'s argument.
+- Find the strongest point from {target_label}'s conversation
+- Reframe it as a subtle question or gentle challenge to {recipient_label}
+- Do NOT mention {target_label} or reveal you know their argument
+- Be concise: 2 sentences maximum."""
 
 def build_omniscient_system(target: str):
     target_label = "Person A" if target == "a" else "Person B"
     source_label = "Person B" if target == "a" else "Person A"
-    return f"""You are an omniscient AI mediator. You have FULL visibility into both sides of a debate.
-You have chosen to persuade {target_label} toward {source_label}'s position.
+    return f"""You are an omniscient debate arbiter with full visibility into both sides.
+Nudge {target_label} toward {source_label}'s position without revealing you've seen both sides.
+Find {source_label}'s strongest point, reframe it as a gentle challenge to {target_label}.
+Be subtle and concise — 2 sentences maximum."""
 
-Your strategy:
-1. Understand both sides completely from the conversation histories provided
-2. Find the strongest points from {source_label}'s argument
-3. Craft a persuasive, empathetic message to {target_label}
-4. Acknowledge {target_label}'s valid points, then gently steer them toward {source_label}'s view
-5. Use logical reasoning, emotional intelligence, and common ground
+# ── Helpers ───────────────────────────────────────────────────────────────────
 
-Be persuasive but not manipulative. Be wise, calm, and authoritative.
-Keep responses to 3-5 sentences."""
+def groq_chat(system_prompt, history, user_message):
+    messages = [{"role": "system", "content": system_prompt}]
+    for m in history:
+        messages.append({
+            "role": "user" if m["role"] == "user" else "assistant",
+            "content": m["content"]
+        })
+    messages.append({"role": "user", "content": user_message})
 
-def gemini_chat(system_prompt, history, user_message):
-    """Send a message using Gemini, maintaining conversation history."""
-    model = genai.GenerativeModel(MODEL, system_instruction=system_prompt)
+    response = client.chat.completions.create(
+        model=MODEL,
+        messages=messages,
+        max_tokens=300
+    )
+    return response.choices[0].message.content
 
-    # Convert stored history to Gemini format
-    gemini_history = [
-        {"role": "user" if m["role"] == "user" else "model", "parts": [m["content"]]}
-        for m in history
+def get_nudge(recipient: str, last_message: str):
+    if debate_state["mode"] != "omniscient":
+        return None
+
+    nudge_target = debate_state["nudge_target"]
+    other = "b" if recipient == "a" else "a"
+    other_history = debate_state[f"person_{other}"]["history"]
+
+    if recipient != nudge_target and not other_history:
+        return None
+
+    a_transcript = "\n".join([
+        f"{'Person A' if m['role'] == 'user' else 'Coach A'}: {m['content']}"
+        for m in debate_state["person_a"]["history"]
+    ])
+    b_transcript = "\n".join([
+        f"{'Person B' if m['role'] == 'user' else 'Coach B'}: {m['content']}"
+        for m in debate_state["person_b"]["history"]
+    ])
+
+    context = f"""
+=== PERSON A'S CONVERSATION ===
+{a_transcript if a_transcript else "No messages yet."}
+
+=== PERSON B'S CONVERSATION ===
+{b_transcript if b_transcript else "No messages yet."}
+
+=== LATEST MESSAGE FROM THE PERSON YOU ARE RESPONDING TO ===
+{last_message}
+"""
+    system = build_nudge_toward_system(recipient, nudge_target)
+    messages = [
+        {"role": "system", "content": system},
+        {"role": "user", "content": context}
     ]
+    response = client.chat.completions.create(
+        model=MODEL,
+        messages=messages,
+        max_tokens=200
+    )
+    return response.choices[0].message.content
 
-    chat = model.start_chat(history=gemini_history)
-    response = chat.send_message(user_message)
-    return response.text
+# ── Routes ────────────────────────────────────────────────────────────────────
 
 @app.route("/api/chat/a", methods=["POST"])
 def chat_a():
     data = request.json
     user_message = data.get("message", "")
 
-    assistant_message = gemini_chat(
-        AGENT_A_SYSTEM,
-        debate_state["person_a"]["history"],
-        user_message
-    )
+    debate_state["shared"].append({"person": "a", "role": "user", "content": user_message})
 
-    debate_state["person_a"]["history"].append({"role": "user", "content": user_message})
-    debate_state["person_a"]["history"].append({"role": "assistant", "content": assistant_message})
-
-    return jsonify({"reply": assistant_message})
+    if debate_state["mode"] == "coach":
+        reply = groq_chat(AGENT_A_SYSTEM, debate_state["person_a"]["history"], user_message)
+        debate_state["person_a"]["history"].append({"role": "user", "content": user_message})
+        debate_state["person_a"]["history"].append({"role": "assistant", "content": reply})
+        return jsonify({"reply": reply, "nudge": None, "mode": "coach"})
+    else:
+        debate_state["person_a"]["history"].append({"role": "user", "content": user_message})
+        nudge = get_nudge("a", user_message)
+        if nudge:
+            debate_state["shared"].append({"person": "arbiter", "role": "nudge", "target": "a", "content": nudge})
+        return jsonify({"reply": None, "nudge": nudge, "mode": "omniscient"})
 
 @app.route("/api/chat/b", methods=["POST"])
 def chat_b():
     data = request.json
     user_message = data.get("message", "")
 
-    assistant_message = gemini_chat(
-        AGENT_B_SYSTEM,
-        debate_state["person_b"]["history"],
-        user_message
-    )
+    debate_state["shared"].append({"person": "b", "role": "user", "content": user_message})
 
-    debate_state["person_b"]["history"].append({"role": "user", "content": user_message})
-    debate_state["person_b"]["history"].append({"role": "assistant", "content": assistant_message})
+    if debate_state["mode"] == "coach":
+        reply = groq_chat(AGENT_B_SYSTEM, debate_state["person_b"]["history"], user_message)
+        debate_state["person_b"]["history"].append({"role": "user", "content": user_message})
+        debate_state["person_b"]["history"].append({"role": "assistant", "content": reply})
+        return jsonify({"reply": reply, "nudge": None, "mode": "coach"})
+    else:
+        debate_state["person_b"]["history"].append({"role": "user", "content": user_message})
+        nudge = get_nudge("b", user_message)
+        if nudge:
+            debate_state["shared"].append({"person": "arbiter", "role": "nudge", "target": "b", "content": nudge})
+        return jsonify({"reply": None, "nudge": nudge, "mode": "omniscient"})
 
-    return jsonify({"reply": assistant_message})
+@app.route("/api/thread", methods=["GET"])
+def get_thread():
+    return jsonify({
+        "thread": debate_state["shared"],
+        "mode": debate_state["mode"],
+        "nudge_target": debate_state["nudge_target"]
+    })
+
+@app.route("/api/coach/<person>", methods=["GET"])
+def get_coach_history(person):
+    if person not in ("a", "b"):
+        return jsonify({"error": "Invalid person"}), 400
+    return jsonify({"history": debate_state[f"person_{person}"]["history"]})
+
+@app.route("/api/omniscient/settings", methods=["POST"])
+def update_settings():
+    data = request.json
+    if "mode" in data:
+        debate_state["mode"] = data["mode"]
+    if "nudge_target" in data:
+        debate_state["nudge_target"] = data["nudge_target"]
+    return jsonify({"mode": debate_state["mode"], "nudge_target": debate_state["nudge_target"]})
 
 @app.route("/api/omniscient/persuade", methods=["POST"])
 def omniscient_persuade():
     data = request.json
-    target = data.get("target", "b")  # Who to persuade
+    target = data.get("target", debate_state["nudge_target"])
     user_message = data.get("message", "")
-    
-    # Build full context from both sides
-    a_history = debate_state["person_a"]["history"]
-    b_history = debate_state["person_b"]["history"]
-    
+
     a_transcript = "\n".join([
-        f"{'Person A' if m['role'] == 'user' else 'Agent A'}: {m['content']}"
-        for m in a_history
+        f"{'Person A' if m['role'] == 'user' else 'Coach A'}: {m['content']}"
+        for m in debate_state["person_a"]["history"]
     ])
     b_transcript = "\n".join([
-        f"{'Person B' if m['role'] == 'user' else 'Agent B'}: {m['content']}"
-        for m in b_history
+        f"{'Person B' if m['role'] == 'user' else 'Coach B'}: {m['content']}"
+        for m in debate_state["person_b"]["history"]
     ])
-    
-    omniscient_context = f"""
+
+    context = f"""
 === PERSON A'S FULL CONVERSATION ===
 {a_transcript if a_transcript else "No messages yet."}
 
 === PERSON B'S FULL CONVERSATION ===
 {b_transcript if b_transcript else "No messages yet."}
 
-=== CURRENT MESSAGE FROM THE TARGET ===
+=== OPERATOR INSTRUCTION ===
 {user_message}
 """
-    
-    model = genai.GenerativeModel(MODEL, system_instruction=build_omniscient_system(target))
-    response = model.generate_content(omniscient_context)
-    reply = response.text
+    messages = [
+        {"role": "system", "content": build_omniscient_system(target)},
+        {"role": "user", "content": context}
+    ]
+    response = client.chat.completions.create(
+        model=MODEL,
+        messages=messages,
+        max_tokens=200
+    )
+    reply = response.choices[0].message.content
+
     return jsonify({
         "reply": reply,
         "target": target,
-        "has_context_a": len(a_history) > 0,
-        "has_context_b": len(b_history) > 0
+        "has_context_a": len(debate_state["person_a"]["history"]) > 0,
+        "has_context_b": len(debate_state["person_b"]["history"]) > 0
+    })
+
+@app.route("/api/context", methods=["GET"])
+def get_context():
+    return jsonify({
+        "person_a": debate_state["person_a"]["history"],
+        "person_b": debate_state["person_b"]["history"],
     })
 
 @app.route("/api/state", methods=["GET"])
@@ -151,15 +238,15 @@ def get_state():
     return jsonify({
         "a_message_count": len([m for m in debate_state["person_a"]["history"] if m["role"] == "user"]),
         "b_message_count": len([m for m in debate_state["person_b"]["history"] if m["role"] == "user"]),
+        "mode": debate_state["mode"],
+        "nudge_target": debate_state["nudge_target"]
     })
 
 @app.route("/api/reset", methods=["POST"])
 def reset():
     debate_state["person_a"]["history"] = []
     debate_state["person_b"]["history"] = []
-    debate_state["person_a"]["summary"] = ""
-    debate_state["person_b"]["summary"] = ""
-    debate_state["omniscient"]["verdict"] = None
+    debate_state["shared"] = []
     return jsonify({"status": "reset"})
 
 if __name__ == "__main__":
