@@ -10,7 +10,7 @@ app = Flask(__name__)
 CORS(app)
 
 genai.configure(api_key=os.environ["GEMINI_API_KEY"])
-MODEL = "gemini-2.5-flash"
+MODEL = "gemini-2.0-flash"
 
 # In-memory state for the debate session
 debate_state = {
