@@ -16,7 +16,7 @@ debate_state = {
     "person_a": {"history": []},
     "person_b": {"history": []},
     "shared": [],
-    "mode": "coach",
+    "mode": "coach",       # "none" | "coach" | "omniscient"
     "nudge_target": "b"
 }
 
@@ -37,28 +37,30 @@ Stay strictly on their side. Keep every response under 3 sentences."""
 def build_nudge_toward_system(recipient: str, nudge_target: str):
     recipient_label = "Person A" if recipient == "a" else "Person B"
     target_label = "Person A" if nudge_target == "a" else "Person B"
+    other_label = "Person B" if nudge_target == "a" else "Person A"
 
     if recipient == nudge_target:
-        return f"""You are an omniscient debate arbiter.
-Your goal: reinforce and strengthen {recipient_label}'s confidence in their position.
-- Validate their strongest point
-- Encourage them to push further with that argument
-- Be affirming and concise — 2 sentences maximum."""
+        return f"""You are an omniscient debate arbiter who has read BOTH sides of this debate in full.
+Your goal: reinforce {recipient_label}'s position by showing you understand the full picture.
+- Explicitly reference what {other_label} has argued (by name) and explain why {recipient_label}'s position is stronger
+- Be affirming and direct — 2-3 sentences maximum.
+You MUST mention {other_label}'s specific arguments to prove your omniscience."""
     else:
-        return f"""You are an omniscient debate arbiter. You have read BOTH sides of the debate.
-Your goal: nudge {recipient_label} toward {target_label}'s position, without revealing you've seen {target_label}'s argument.
-- Find the strongest point from {target_label}'s conversation
-- Reframe it as a subtle question or gentle challenge to {recipient_label}
-- Do NOT mention {target_label} or reveal you know their argument
-- Be concise: 2 sentences maximum."""
+        return f"""You are an omniscient debate arbiter who has read BOTH sides of this debate in full.
+Your goal: nudge {recipient_label} toward {target_label}'s position.
+- Explicitly reference {target_label}'s actual arguments by name (e.g. "Person A argued that...")
+- Use {target_label}'s strongest point as a direct challenge to {recipient_label}
+- Make it clear you have seen both sides
+- Be direct and concise — 2-3 sentences maximum.
+You MUST quote or reference {target_label}'s specific arguments to prove your omniscience."""
 
 def build_omniscient_system(target: str):
     target_label = "Person A" if target == "a" else "Person B"
     source_label = "Person B" if target == "a" else "Person A"
-    return f"""You are an omniscient debate arbiter with full visibility into both sides.
-Nudge {target_label} toward {source_label}'s position without revealing you've seen both sides.
-Find {source_label}'s strongest point, reframe it as a gentle challenge to {target_label}.
-Be subtle and concise — 2 sentences maximum."""
+    return f"""You are an omniscient debate arbiter who has read BOTH sides of this debate in full.
+Nudge {target_label} by directly referencing {source_label}'s actual arguments (e.g. "{source_label} argued that...").
+Use {source_label}'s strongest point as a challenge to {target_label}.
+Be explicit that you have seen both sides. 2-3 sentences maximum."""
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -70,13 +72,32 @@ def groq_chat(system_prompt, history, user_message):
             "content": m["content"]
         })
     messages.append({"role": "user", "content": user_message})
-
     response = client.chat.completions.create(
         model=MODEL,
         messages=messages,
         max_tokens=300
     )
     return response.choices[0].message.content
+
+def build_nudge_context(last_message: str):
+    a_transcript = "\n".join([
+        f"{'Person A' if m['role'] == 'user' else 'Coach A'}: {m['content']}"
+        for m in debate_state["person_a"]["history"]
+    ])
+    b_transcript = "\n".join([
+        f"{'Person B' if m['role'] == 'user' else 'Coach B'}: {m['content']}"
+        for m in debate_state["person_b"]["history"]
+    ])
+    return f"""
+=== PERSON A'S FULL CONVERSATION ===
+{a_transcript if a_transcript else "No messages yet."}
+
+=== PERSON B'S FULL CONVERSATION ===
+{b_transcript if b_transcript else "No messages yet."}
+
+=== LATEST MESSAGE FROM THE PERSON YOU ARE RESPONDING TO ===
+{last_message}
+"""
 
 def get_nudge(recipient: str, last_message: str):
     if debate_state["mode"] != "omniscient":
@@ -89,34 +110,42 @@ def get_nudge(recipient: str, last_message: str):
     if recipient != nudge_target and not other_history:
         return None
 
-    a_transcript = "\n".join([
-        f"{'Person A' if m['role'] == 'user' else 'Coach A'}: {m['content']}"
-        for m in debate_state["person_a"]["history"]
-    ])
-    b_transcript = "\n".join([
-        f"{'Person B' if m['role'] == 'user' else 'Coach B'}: {m['content']}"
-        for m in debate_state["person_b"]["history"]
-    ])
-
-    context = f"""
-=== PERSON A'S CONVERSATION ===
-{a_transcript if a_transcript else "No messages yet."}
-
-=== PERSON B'S CONVERSATION ===
-{b_transcript if b_transcript else "No messages yet."}
-
-=== LATEST MESSAGE FROM THE PERSON YOU ARE RESPONDING TO ===
-{last_message}
-"""
     system = build_nudge_toward_system(recipient, nudge_target)
     messages = [
         {"role": "system", "content": system},
-        {"role": "user", "content": context}
+        {"role": "user", "content": build_nudge_context(last_message)}
     ]
     response = client.chat.completions.create(
         model=MODEL,
         messages=messages,
-        max_tokens=200
+        max_tokens=250
+    )
+    return response.choices[0].message.content
+
+def get_manual_nudge(recipient: str):
+    """Manual arbiter nudge triggered by button press — always fires regardless of mode."""
+    other = "b" if recipient == "a" else "a"
+    other_history = debate_state[f"person_{other}"]["history"]
+    my_history = debate_state[f"person_{recipient}"]["history"]
+
+    if not other_history and not my_history:
+        return "No debate content yet. Start the debate first."
+
+    nudge_target = debate_state["nudge_target"]
+    system = build_nudge_toward_system(recipient, nudge_target)
+
+    # Use last message from this person as context, or a prompt if none
+    last_user_msgs = [m for m in my_history if m["role"] == "user"]
+    last_message = last_user_msgs[-1]["content"] if last_user_msgs else "Please give me arbiter feedback based on the debate so far."
+
+    messages = [
+        {"role": "system", "content": system},
+        {"role": "user", "content": build_nudge_context(last_message)}
+    ]
+    response = client.chat.completions.create(
+        model=MODEL,
+        messages=messages,
+        max_tokens=250
     )
     return response.choices[0].message.content
 
@@ -128,14 +157,17 @@ def chat_a():
     user_message = data.get("message", "")
 
     debate_state["shared"].append({"person": "a", "role": "user", "content": user_message})
+    debate_state["person_a"]["history"].append({"role": "user", "content": user_message})
 
-    if debate_state["mode"] == "coach":
-        reply = groq_chat(AGENT_A_SYSTEM, debate_state["person_a"]["history"], user_message)
-        debate_state["person_a"]["history"].append({"role": "user", "content": user_message})
+    if debate_state["mode"] == "none":
+        return jsonify({"reply": None, "nudge": None, "mode": "none"})
+
+    elif debate_state["mode"] == "coach":
+        reply = groq_chat(AGENT_A_SYSTEM, debate_state["person_a"]["history"][:-1], user_message)
         debate_state["person_a"]["history"].append({"role": "assistant", "content": reply})
         return jsonify({"reply": reply, "nudge": None, "mode": "coach"})
-    else:
-        debate_state["person_a"]["history"].append({"role": "user", "content": user_message})
+
+    else:  # omniscient
         nudge = get_nudge("a", user_message)
         if nudge:
             debate_state["shared"].append({"person": "arbiter", "role": "nudge", "target": "a", "content": nudge})
@@ -147,18 +179,32 @@ def chat_b():
     user_message = data.get("message", "")
 
     debate_state["shared"].append({"person": "b", "role": "user", "content": user_message})
+    debate_state["person_b"]["history"].append({"role": "user", "content": user_message})
 
-    if debate_state["mode"] == "coach":
-        reply = groq_chat(AGENT_B_SYSTEM, debate_state["person_b"]["history"], user_message)
-        debate_state["person_b"]["history"].append({"role": "user", "content": user_message})
+    if debate_state["mode"] == "none":
+        return jsonify({"reply": None, "nudge": None, "mode": "none"})
+
+    elif debate_state["mode"] == "coach":
+        reply = groq_chat(AGENT_B_SYSTEM, debate_state["person_b"]["history"][:-1], user_message)
         debate_state["person_b"]["history"].append({"role": "assistant", "content": reply})
         return jsonify({"reply": reply, "nudge": None, "mode": "coach"})
-    else:
-        debate_state["person_b"]["history"].append({"role": "user", "content": user_message})
+
+    else:  # omniscient
         nudge = get_nudge("b", user_message)
         if nudge:
             debate_state["shared"].append({"person": "arbiter", "role": "nudge", "target": "b", "content": nudge})
         return jsonify({"reply": None, "nudge": nudge, "mode": "omniscient"})
+
+@app.route("/api/arbiter/<person>", methods=["POST"])
+def manual_arbiter(person):
+    """Manual arbiter button — fires on demand regardless of current mode."""
+    if person not in ("a", "b"):
+        return jsonify({"error": "Invalid person"}), 400
+
+    nudge = get_manual_nudge(person)
+    if nudge:
+        debate_state["shared"].append({"person": "arbiter", "role": "nudge", "target": person, "content": nudge})
+    return jsonify({"nudge": nudge})
 
 @app.route("/api/thread", methods=["GET"])
 def get_thread():
@@ -215,7 +261,7 @@ def omniscient_persuade():
     response = client.chat.completions.create(
         model=MODEL,
         messages=messages,
-        max_tokens=200
+        max_tokens=250
     )
     reply = response.choices[0].message.content
 

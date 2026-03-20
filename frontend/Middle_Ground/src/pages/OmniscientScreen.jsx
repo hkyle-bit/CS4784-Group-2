@@ -119,6 +119,12 @@ export default function OmniscientScreen({ onBack }) {
       {/* Mode toggle: Coach vs Omniscient */}
       <div className="mode-toggle-bar">
         <button
+          className={`mode-btn ${mode === 'none' ? 'active' : ''}`}
+          onClick={() => handleModeToggle('none')}
+        >
+          🚫 No AI
+        </button>
+        <button
           className={`mode-btn ${mode === 'coach' ? 'active' : ''}`}
           onClick={() => handleModeToggle('coach')}
         >
@@ -199,9 +205,11 @@ export default function OmniscientScreen({ onBack }) {
             <div className="omni-empty-glyph">👁</div>
             <p className="omni-empty-title">All truths are known here</p>
             <p className="omni-empty-sub">
-              {mode === 'coach'
-                ? 'Currently in Personal Coach mode. Switch to Omniscient to activate nudges.'
-                : `Nudging both parties toward Person ${nudgeTarget.toUpperCase()}'s view automatically.`}
+              {mode === 'none'
+                ? 'No AI mode — pure debate between the two participants.'
+                : mode === 'coach'
+                ? 'Personal Coach mode — each person gets private coaching.'
+                : `Omniscient mode — nudging both toward Person ${nudgeTarget.toUpperCase()}'s view.`}
             </p>
           </div>
         )}

@@ -246,3 +246,35 @@
   0%, 80%, 100% { transform: translateY(0); }
   40% { transform: translateY(-7px); }
 }
+
+/* Input actions row */
+.input-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+/* Manual arbiter button */
+.arbiter-btn {
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  padding: 0.4rem 1rem;
+  background: none;
+  border: 1px solid var(--gold-muted);
+  color: var(--gold);
+  cursor: pointer;
+  letter-spacing: 0.08em;
+  transition: all 0.2s;
+  border-radius: 2px;
+  white-space: nowrap;
+}
+
+.arbiter-btn:hover:not(:disabled) {
+  background: rgba(184, 134, 11, 0.1);
+  border-color: var(--gold);
+}
+
+.arbiter-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}

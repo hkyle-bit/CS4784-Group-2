@@ -8,6 +8,7 @@ const CONFIG = {
     color: 'crimson',
     placeholder: 'State your position...',
     endpoint: '/api/chat/a',
+    arbiterEndpoint: '/api/arbiter/a',
   },
   b: {
     label: 'Person B',
@@ -15,6 +16,7 @@ const CONFIG = {
     color: 'cobalt',
     placeholder: 'Present your argument...',
     endpoint: '/api/chat/b',
+    arbiterEndpoint: '/api/arbiter/b',
   },
 }
 
@@ -27,6 +29,7 @@ export default function PersonScreen({ person, onBack }) {
   const [mode, setMode] = useState('coach')
   const [input, setInput] = useState('')
   const [loading, setLoading] = useState(false)
+  const [arbiterLoading, setArbiterLoading] = useState(false)
   const bottomRef = useRef(null)
 
   useEffect(() => {
@@ -63,18 +66,29 @@ export default function PersonScreen({ person, onBack }) {
     setLoading(true)
 
     try {
-      const res = await fetch(cfg.endpoint, {
+      await fetch(cfg.endpoint, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ message: text }),
       })
-      const data = await res.json()
-      console.log('Response from server:', data)
       await fetchAll()
     } catch (e) {
       console.error('Send error:', e)
     } finally {
       setLoading(false)
+    }
+  }
+
+  async function requestArbiter() {
+    if (arbiterLoading) return
+    setArbiterLoading(true)
+    try {
+      await fetch(cfg.arbiterEndpoint, { method: 'POST' })
+      await fetchAll()
+    } catch (e) {
+      console.error('Arbiter error:', e)
+    } finally {
+      setArbiterLoading(false)
     }
   }
 
@@ -93,7 +107,6 @@ export default function PersonScreen({ person, onBack }) {
       if (msg.role === 'user') {
         display.push({ type: 'thread', msg })
 
-        // After my own message in coach mode, insert the next coach reply
         if (msg.person === person && mode === 'coach') {
           if (coachIdx < coachMessages.length) {
             display.push({ type: 'coach', msg: coachMessages[coachIdx] })
@@ -102,8 +115,7 @@ export default function PersonScreen({ person, onBack }) {
         }
       }
 
-      // Nudges: show in omniscient mode, targeted at this person
-      if (msg.role === 'nudge' && mode === 'omniscient' && msg.target === person) {
+      if (msg.role === 'nudge' && msg.target === person) {
         display.push({ type: 'nudge', msg })
       }
     }
@@ -152,7 +164,7 @@ export default function PersonScreen({ person, onBack }) {
           <span className="person-name">{cfg.label}</span>
         </div>
         <div className="privacy-badge">
-          {mode === 'coach' ? '🎓 Coach Mode' : '👁 Omniscient Mode'}
+          {mode === 'none' ? '🚫 No AI' : mode === 'coach' ? '🎓 Coach' : '👁 Omniscient'}
         </div>
       </header>
 
@@ -167,9 +179,9 @@ export default function PersonScreen({ person, onBack }) {
 
         {display.map((item, i) => renderMessage(item, i))}
 
-        {loading && (
-          <div className={`message ${mode === 'coach' ? 'message-coach' : 'message-nudge'}`}>
-            <div className="message-label">{mode === 'coach' ? 'Your Coach' : '👁 Arbiter'}</div>
+        {(loading || arbiterLoading) && (
+          <div className={`message ${arbiterLoading ? 'message-nudge' : mode === 'coach' ? 'message-coach' : 'message-nudge'}`}>
+            <div className="message-label">{arbiterLoading ? '👁 Arbiter' : mode === 'coach' ? 'Your Coach' : '👁 Arbiter'}</div>
             <div className="message-bubble typing">
               <span /><span /><span />
             </div>
@@ -193,7 +205,16 @@ export default function PersonScreen({ person, onBack }) {
             ↑
           </button>
         </div>
-        <p className="input-hint">Press Enter to send · Shift+Enter for new line</p>
+        <div className="input-actions">
+          <p className="input-hint">Press Enter to send · Shift+Enter for new line</p>
+          <button
+            className="arbiter-btn"
+            onClick={requestArbiter}
+            disabled={arbiterLoading}
+          >
+            {arbiterLoading ? '...' : '👁 Ask Arbiter'}
+          </button>
+        </div>
       </footer>
     </div>
   )
