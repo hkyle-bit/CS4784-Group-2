@@ -9,24 +9,16 @@ const CONFIG = {
     sigil: 'I',
     color: 'crimson',
     placeholder: 'State your position...',
-<<<<<<< Updated upstream
-    endpoint: '/api/chat/a',
-=======
     endpoint: `${API_BASE}/api/chat/a`,
     arbiterEndpoint: `${API_BASE}/api/arbiter/a`,
->>>>>>> Stashed changes
   },
   b: {
     label: 'Person B',
     sigil: 'II',
     color: 'cobalt',
     placeholder: 'Present your argument...',
-<<<<<<< Updated upstream
-    endpoint: '/api/chat/b',
-=======
     endpoint: `${API_BASE}/api/chat/b`,
     arbiterEndpoint: `${API_BASE}/api/arbiter/b`,
->>>>>>> Stashed changes
   },
 }
 

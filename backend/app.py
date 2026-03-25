@@ -152,21 +152,6 @@ def chat_a():
         if not user_message:
             return jsonify({"error": "Message cannot be empty"}), 400
 
-<<<<<<< Updated upstream
-    debate_state["shared"].append({"person": "a", "role": "user", "content": user_message})
-
-    if debate_state["mode"] == "coach":
-        reply = groq_chat(AGENT_A_SYSTEM, debate_state["person_a"]["history"], user_message)
-        debate_state["person_a"]["history"].append({"role": "user", "content": user_message})
-        debate_state["person_a"]["history"].append({"role": "assistant", "content": reply})
-        return jsonify({"reply": reply, "nudge": None, "mode": "coach"})
-    else:
-        debate_state["person_a"]["history"].append({"role": "user", "content": user_message})
-        nudge = get_nudge("a", user_message)
-        if nudge:
-            debate_state["shared"].append({"person": "arbiter", "role": "nudge", "target": "a", "content": nudge})
-        return jsonify({"reply": None, "nudge": nudge, "mode": "omniscient"})
-=======
         debate_state["shared"].append({"person": "a", "role": "user", "content": user_message})
         debate_state["person_a"]["history"].append({"role": "user", "content": user_message})
 
@@ -187,7 +172,6 @@ def chat_a():
     except Exception as e:
         print(f"Error in chat_a: {str(e)}")
         return jsonify({"error": f"Server error: {str(e)}"}), 500
->>>>>>> Stashed changes
 
 @app.route("/api/chat/b", methods=["POST"])
 def chat_b():
@@ -200,21 +184,6 @@ def chat_b():
         if not user_message:
             return jsonify({"error": "Message cannot be empty"}), 400
 
-<<<<<<< Updated upstream
-    debate_state["shared"].append({"person": "b", "role": "user", "content": user_message})
-
-    if debate_state["mode"] == "coach":
-        reply = groq_chat(AGENT_B_SYSTEM, debate_state["person_b"]["history"], user_message)
-        debate_state["person_b"]["history"].append({"role": "user", "content": user_message})
-        debate_state["person_b"]["history"].append({"role": "assistant", "content": reply})
-        return jsonify({"reply": reply, "nudge": None, "mode": "coach"})
-    else:
-        debate_state["person_b"]["history"].append({"role": "user", "content": user_message})
-        nudge = get_nudge("b", user_message)
-        if nudge:
-            debate_state["shared"].append({"person": "arbiter", "role": "nudge", "target": "b", "content": nudge})
-        return jsonify({"reply": None, "nudge": nudge, "mode": "omniscient"})
-=======
         debate_state["shared"].append({"person": "b", "role": "user", "content": user_message})
         debate_state["person_b"]["history"].append({"role": "user", "content": user_message})
 
@@ -235,7 +204,6 @@ def chat_b():
     except Exception as e:
         print(f"Error in chat_b: {str(e)}")
         return jsonify({"error": f"Server error: {str(e)}"}), 500
->>>>>>> Stashed changes
 
 @app.route("/api/thread", methods=["GET"])
 def get_thread():
