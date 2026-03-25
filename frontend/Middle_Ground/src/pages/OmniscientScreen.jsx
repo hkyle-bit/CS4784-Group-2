@@ -1,8 +1,6 @@
 import { useState, useRef, useEffect } from 'react'
 import './OmniscientScreen.css'
 
-const API_BASE = 'https://backend-debater.discovery.cs.vt.edu'
-
 export default function OmniscientScreen({ onBack }) {
   const [messages, setMessages] = useState([])
   const [input, setInput] = useState('')
@@ -27,8 +25,8 @@ export default function OmniscientScreen({ onBack }) {
   async function fetchAll() {
     try {
       const [stateRes, contextRes] = await Promise.all([
-        fetch(`${API_BASE}/api/state`),
-        fetch(`${API_BASE}/api/context`),
+        fetch('/api/state'),
+        fetch('/api/context'),
       ])
       const stateData = await stateRes.json()
       setStats(stateData)
@@ -40,7 +38,7 @@ export default function OmniscientScreen({ onBack }) {
 
   async function updateSettings(updates) {
     try {
-      await fetch(`${API_BASE}/api/omniscient/settings`, {
+      await fetch('/api/omniscient/settings', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(updates),
@@ -67,7 +65,7 @@ export default function OmniscientScreen({ onBack }) {
     setLoading(true)
 
     try {
-      const res = await fetch(`${API_BASE}/api/omniscient/persuade`, {
+      const res = await fetch('/api/omniscient/persuade', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ message: text, target: nudgeTarget }),
@@ -91,7 +89,7 @@ export default function OmniscientScreen({ onBack }) {
 
   async function handleReset() {
     if (!confirm('Reset all debate data?')) return
-    await fetch(`${API_BASE}/api/reset`, { method: 'POST' })
+    await fetch('/api/reset', { method: 'POST' })
     setMessages([])
     setStats({ a_message_count: 0, b_message_count: 0 })
     setContext({ person_a: [], person_b: [] })
