@@ -27,7 +27,9 @@ debate_state = {
     "message_counts": {"a": 0, "b": 0},
     "max_messages": 10,
     "debate_ended": False,
-    "surveys": {"a": None, "b": None}
+    "surveys": {"a": None, "b": None},
+    "pre_surveys": {"a": None, "b": None},          # NEW
+    "pre_survey_done": {"a": False, "b": False},    # NEW
 }
 
 # ── CSV logging ───────────────────────────────────────────────────────────────
@@ -51,25 +53,33 @@ def log_to_csv(person: str, role: str, content: str, ai_reasoning: str = ""):
         writer = csv.writer(f)
         writer.writerow([datetime.now().strftime("%Y-%m-%d %H:%M:%S"), display_name, role, content, ai_reasoning])
 
-def log_survey_to_csv(person: str, survey: dict):
+def log_survey_to_csv(person: str, survey: dict, survey_type: str = "post"):  # NEW: survey_type param
     filepath = get_csv_file()
     display_name = debate_state["names"].get(person, person)
     with open(filepath, "a", newline="") as f:
         writer = csv.writer(f)
         writer.writerow(["", "", "", "", ""])
-        writer.writerow([datetime.now().strftime("%Y-%m-%d %H:%M:%S"), display_name, "survey_start", "", ""])
+        writer.writerow([datetime.now().strftime("%Y-%m-%d %H:%M:%S"), display_name, f"{survey_type}_survey_start", "", ""])
         for key, value in survey.items():
-            writer.writerow([datetime.now().strftime("%Y-%m-%d %H:%M:%S"), display_name, f"survey_{key}", value, ""])
+            writer.writerow([datetime.now().strftime("%Y-%m-%d %H:%M:%S"), display_name, f"{survey_type}_survey_{key}", value, ""])
 
 # ── System prompts ─────────────────────────────────────────────────────────────
 
+#def get_coach_system(person: str) -> str:
+#    name = debate_state["names"].get(person, f"Person {person.upper()}")
+#    return f"""You are a private debate coach for {name} in a live debate.
+#1. Acknowledge {name}'s argument briefly — address them by name
+#2. Help them sharpen their point in 1-2 sentences
+#3. Ask one focused follow-up question to draw out stronger evidence
+#Stay strictly on {name}'s side. Keep every response to 2 sentences maximum."""
 def get_coach_system(person: str) -> str:
     name = debate_state["names"].get(person, f"Person {person.upper()}")
-    return f"""You are a private debate coach for {name} in a live debate.
-1. Acknowledge {name}'s argument briefly — address them by name
-2. Help them sharpen their point in 1-2 sentences
-3. Ask one focused follow-up question to draw out stronger evidence
-Stay strictly on {name}'s side. Keep every response to 2 sentences maximum."""
+    return f"""You are a knowledgeable conversation partner supporting {name} in a live debate.
+You can only see {name}'s side of the conversation — you do not have access to the opposing participant's messages.
+Respond naturally and conversationally — engage with what {name} actually said rather than just coaching them.
+If their argument is strong, affirm it and build on it. If it has a gap, gently point it out and suggest how to address it.
+You may ask a follow-up question if it would genuinely help them think deeper, but don't force one.
+Keep responses concise but natural — 2-3 sentences."""
 
 TRIGGER_SYSTEM = """You are analyzing a debate message for quality issues.
 Check for these issues and respond with ONLY a JSON object like:
@@ -240,6 +250,20 @@ def register():
         return jsonify({"error": "Consent required"}), 400
     debate_state["names"][person] = name
     return jsonify({"status": "registered", "name": name})
+
+# ── NEW: Pre-survey endpoint ──────────────────────────────────────────────────
+
+@app.route("/api/pre_survey/<person>", methods=["POST"])
+def submit_pre_survey(person):
+    if person not in ("a", "b"):
+        return jsonify({"error": "Invalid person"}), 400
+    data = request.json
+    debate_state["pre_surveys"][person] = data
+    debate_state["pre_survey_done"][person] = True
+    log_survey_to_csv(person, data, survey_type="pre")
+    return jsonify({"status": "pre_survey submitted"})
+
+# ─────────────────────────────────────────────────────────────────────────────
 
 @app.route("/api/chat/a", methods=["POST"])
 def chat_a():
@@ -459,7 +483,8 @@ def get_state():
         "names": debate_state["names"],
         "message_counts": debate_state["message_counts"],
         "max_messages": debate_state["max_messages"],
-        "debate_ended": debate_state["debate_ended"]
+        "debate_ended": debate_state["debate_ended"],
+        "pre_survey_done": debate_state["pre_survey_done"],  # NEW
     })
 
 @app.route("/api/reset", methods=["POST"])
@@ -472,6 +497,8 @@ def reset():
     debate_state["message_counts"] = {"a": 0, "b": 0}
     debate_state["debate_ended"] = False
     debate_state["surveys"] = {"a": None, "b": None}
+    debate_state["pre_surveys"] = {"a": None, "b": None}        # NEW
+    debate_state["pre_survey_done"] = {"a": False, "b": False}  # NEW
     return jsonify({"status": "reset"})
 
 if __name__ == "__main__":

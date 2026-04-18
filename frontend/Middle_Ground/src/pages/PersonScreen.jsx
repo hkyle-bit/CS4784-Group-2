@@ -1,5 +1,6 @@
 import { useState, useRef, useEffect } from 'react'
 import ConsentScreen from './ConsentScreen.jsx'
+import PreSurveyScreen from './PreSurveyScreen.jsx'
 import SurveyScreen from './SurveyScreen.jsx'
 import './PersonScreen.css'
 
@@ -9,12 +10,14 @@ const CONFIG = {
 }
 
 const MAX_MESSAGES = 10
+const MIN_MESSAGES = 4
 
 export default function PersonScreen({ person, onBack }) {
   const cfg = CONFIG[person]
   const otherCfg = CONFIG[person === 'a' ? 'b' : 'a']
 
   const [consented, setConsented] = useState(null)
+  const [preSurveyDone, setPreSurveyDone] = useState(false)
   const [participantName, setParticipantName] = useState('')
   const [thread, setThread] = useState([])
   const [mode, setMode] = useState('coach')
@@ -24,9 +27,11 @@ export default function PersonScreen({ person, onBack }) {
   const [loading, setLoading] = useState(false)
   const [sideLoading, setSideLoading] = useState(false)
   const [messageCount, setMessageCount] = useState(0)
+  const [allMessageCounts, setAllMessageCounts] = useState({ a: 0, b: 0 })
   const [debateEnded, setDebateEnded] = useState(false)
   const [showSurvey, setShowSurvey] = useState(false)
   const [endingDebate, setEndingDebate] = useState(false)
+  const [otherName, setOtherName] = useState('')
   const bottomRef = useRef(null)
   const sideBottomRef = useRef(null)
   const prevThreadLen = useRef(0)
@@ -41,6 +46,7 @@ export default function PersonScreen({ person, onBack }) {
         if (storedName && storedName !== defaultName) {
           setParticipantName(storedName)
           setConsented(true)
+          setPreSurveyDone(data.pre_survey_done?.[person] || false)
         } else {
           setConsented(false)
         }
@@ -67,11 +73,11 @@ export default function PersonScreen({ person, onBack }) {
   }, [sideMessages])
 
   useEffect(() => {
-    if (!consented) return
+    if (!consented || !preSurveyDone) return
     fetchAll()
     const interval = setInterval(fetchAll, 5000)
     return () => clearInterval(interval)
-  }, [consented])
+  }, [consented, preSurveyDone])
 
   const seenAutoIds = useRef(new Set())
 
@@ -87,11 +93,12 @@ export default function PersonScreen({ person, onBack }) {
       setThread(thread)
       setMode(threadData.mode || 'coach')
       setMessageCount(stateData.message_counts?.[person] || 0)
+      setAllMessageCounts(stateData.message_counts || { a: 0, b: 0 })
+      setOtherName(stateData.names?.[person === 'a' ? 'b' : 'a'] || otherCfg.label)
       if (threadData.debate_ended && !debateEnded) {
         setDebateEnded(true)
         setShowSurvey(true)
       }
-      // Pull cross-person omniscient auto-responses into side panel
       thread.forEach((msg, idx) => {
         if (msg.role === 'auto_side' && msg.target === person && !seenAutoIds.current.has(idx)) {
           seenAutoIds.current.add(idx)
@@ -116,7 +123,6 @@ export default function PersonScreen({ person, onBack }) {
       if (data.error) { alert(data.error); return }
       setMessageCount(data.count || messageCount + 1)
 
-      // Handle auto-response from backend
       if (data.auto_reply) {
         setSideMessages(prev => [...prev, {
           role: 'assistant',
@@ -176,15 +182,42 @@ export default function PersonScreen({ person, onBack }) {
   }
 
   const limitReached = messageCount >= MAX_MESSAGES
+  const minTurnsMet = allMessageCounts.a >= MIN_MESSAGES && allMessageCounts.b >= MIN_MESSAGES
 
   if (consented === null) return null
 
   if (!consented) {
-    return <ConsentScreen person={person} onBack={onBack} onConsented={name => { setParticipantName(name); setConsented(true) }} />
+    return (
+      <ConsentScreen
+        person={person}
+        onBack={onBack}
+        onConsented={name => {
+          setParticipantName(name)
+          setConsented(true)
+        }}
+      />
+    )
+  }
+
+  if (!preSurveyDone) {
+    return (
+      <PreSurveyScreen
+        person={person}
+        participantName={participantName}
+        onCompleted={() => setPreSurveyDone(true)}
+      />
+    )
   }
 
   if (showSurvey) {
-    return <SurveyScreen person={person} participantName={participantName} mode={mode} onSubmitted={onBack} />
+    return (
+      <SurveyScreen
+        person={person}
+        participantName={participantName}
+        mode={mode}
+        onSubmitted={onBack}
+      />
+    )
   }
 
   return (
@@ -198,8 +231,8 @@ export default function PersonScreen({ person, onBack }) {
         <div className="header-right">
           <div className="privacy-badge">{mode === 'none' ? '🚫 No AI' : mode === 'coach' ? '🎓 Coach' : '👁 Omniscient'}</div>
           <div className={`msg-counter ${limitReached ? 'limit' : ''}`}>{messageCount}/{MAX_MESSAGES}</div>
-          <button className="end-btn" onClick={endDebate} disabled={endingDebate || debateEnded}>
-            {endingDebate ? 'Ending...' : 'End Debate'}
+          <button className="end-btn" onClick={endDebate} disabled={endingDebate || debateEnded || !minTurnsMet} title={!minTurnsMet ? `Both participants must send at least ${MIN_MESSAGES} messages before ending` : ''}>
+            {endingDebate ? 'Ending...' : !minTurnsMet ? `Min ${MIN_MESSAGES} turns required` : 'End Debate'}
           </button>
         </div>
       </header>
@@ -220,7 +253,7 @@ export default function PersonScreen({ person, onBack }) {
               const isMe = msg.person === person
               return (
                 <div key={i} className={`message ${isMe ? 'message-me' : 'message-other'}`}>
-                  <div className="message-label">{isMe ? participantName : otherCfg.label}</div>
+                  <div className="message-label">{isMe ? participantName : otherName}</div>
                   <div className="message-bubble">{msg.content}</div>
                 </div>
               )

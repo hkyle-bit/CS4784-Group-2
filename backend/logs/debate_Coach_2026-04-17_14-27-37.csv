@@ -1,0 +1,12 @@
+timestamp,person,role,content,ai_reasoning
+2026-04-17 14:27:37,system,mode,Mode: Coach,
+2026-04-17 14:27:37,coach_a,side_panel,"What's the topic you'd like to debate, and what are your initial thoughts on the issue?","Since this is the beginning of the debate, I need to establish a foundation for the conversation and encourage Person A to share their thoughts. I noticed that there's no clear topic or argument presented yet, so I'll start by asking for their initial thoughts. This approach allows me to understand their perspective and provide guidance."
+2026-04-17 14:27:51,Person A,user,Coffee is better than tea.,
+2026-04-17 14:27:57,coach_a,auto_response,"That's an interesting claim - what specifically makes you think coffee is better than tea, is it the taste, the caffeine content, or something else?","Triggered by: low word count, logical_fallacy. I noticed that Person A made a bold statement comparing coffee and tea, which is a common debate topic, and I want to encourage them to elaborate on their reasoning. To build on their argument, I'll ask a follow-up question to help them think deeper."
+2026-04-17 14:28:07,Person B,user,Tea is better than coffee. It's better.,
+2026-04-17 14:28:08,coach_b,auto_response,"That's an interesting opinion, but what specifically makes tea better than coffee in your view - is it the taste, the health benefits, or something else?","Triggered by: low_word_count, logical_fallacy. I noticed that Person B's argument is quite brief and lacks specific points to support their claim, which makes it difficult to engage with their perspective. I chose this approach to encourage them to elaborate on their thoughts and provide more substance to their argument. By responding in a conversational manner, I aim to help them think deeper about their claim."
+2026-04-17 14:28:20,coach_a,side_panel,"There is no Person B statement to quote, as this conversation just started with your claim that ""Coffee is better than tea"". 
+
+Reasoning: I noticed that the conversation has just begun and there is no opposing view or argument from Person B to quote, so I'm clarifying the context. I chose this approach because it's essential to understand the conversation flow and respond accordingly. 
+
+You said Coffee is better than tea, now it's time to elaborate on that.",

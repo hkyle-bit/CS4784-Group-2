@@ -1,0 +1,10 @@
+timestamp,person,role,content,ai_reasoning
+2026-04-17 14:17:06,system,mode,Mode: Omniscient,
+,,,,
+2026-04-17 14:17:06,K,pre_survey_start,,
+2026-04-17 14:17:06,K,pre_survey_position_strength,4,
+2026-04-17 14:17:06,K,pre_survey_openness_to_change,4,
+2026-04-17 14:17:06,K,pre_survey_argument_confidence,5,
+2026-04-17 14:17:06,K,pre_survey_opposing_familiarity,5,
+2026-04-17 14:17:06,K,pre_survey_expects_change,Yes,
+2026-04-17 14:17:09,system,debate_ended,Debate ended by participant,

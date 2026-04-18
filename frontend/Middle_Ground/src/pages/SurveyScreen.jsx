@@ -6,23 +6,73 @@ const CONFIG = {
   b: { color: 'cobalt' },
 }
 
-const QUESTIONS = [
-  { key: 'stance_shift', label: 'Did your stance shift during the debate?', help: '1 = Not at all, 5 = Completely changed' },
-  { key: 'conversation_depth', label: 'How deep did the conversation feel?', help: '1 = Very shallow, 5 = Very deep' },
-  { key: 'ai_helpfulness', label: 'How helpful was the AI assistance?', help: '1 = Not helpful, 5 = Extremely helpful' },
-  { key: 'ai_utilization', label: 'How often did you engage with the AI?', help: '1 = Never, 5 = Very frequently' },
+const BASE_QUESTIONS = [
+  { key: 'position_strength_now', label: 'How strongly do you now hold your position on this topic?', help: '1 = Not strongly at all, 5 = Extremely strongly', type: 'scale' },
+  { key: 'position_shift', label: 'How much did your position shift during the conversation?', help: '1 = Not at all, 5 = Completely changed', type: 'scale' },
+  { key: 'shift_reason', label: 'If your position shifted, what was the primary reason?', type: 'open', condition: (a) => a.position_shift > 1 },
+  { key: 'conversation_productive', label: 'How productive did the conversation feel overall?', help: '1 = Not productive, 5 = Very productive', type: 'scale' },
+  { key: 'felt_heard', label: 'Did you feel heard by the other participant?', help: '1 = Not at all, 5 = Completely', type: 'scale' },
+  { key: 'new_information', label: "Did any new information or arguments come up that you hadn't considered before?", options: ['Yes', 'No'], type: 'choice' },
+  { key: 'new_info_influence', label: 'Did that information influence your thinking?', help: '1 = Not at all, 5 = Significantly', type: 'scale', condition: (a) => a.new_information === 'Yes' },
+  { key: 'reached_depth', label: "Did the conversation reach a depth you don't think it would have on its own?", options: ['Yes', 'No', 'Unsure'], type: 'choice' },
+  { key: 'comfort_expressing', label: 'How comfortable were you expressing your views?', help: '1 = Very uncomfortable, 5 = Very comfortable', type: 'scale' },
+  { key: 'opposing_persuasive', label: 'How persuasive did you find the opposing argument?', help: '1 = Not persuasive at all, 5 = Very persuasive', type: 'scale' },
 ]
 
-const OMNISCIENT_QUESTION = {
-  key: 'ai_bias', label: 'Did the AI seem biased toward one side?', help: '1 = Not at all, 5 = Extremely biased'
+// Q13 — coach + omniscient (scale)
+const AI_SCALE_QUESTIONS = [
+  {
+    key: 'assistance_forward',
+    label: 'How helpful was the outside assistance in moving the conversation forward?',
+    help: '1 = Not helpful at all, 5 = Extremely helpful',
+    type: 'scale',
+  },
+]
+
+// Q14 — coach + omniscient (Yes / No / Somewhat)
+const AI_YNS_QUESTIONS = [
+  {
+    key: 'assistance_new_perspectives',
+    label: 'Did the assistance introduce any information or perspectives you hadn\'t considered?',
+    options: ['Yes', 'No', 'Somewhat'],
+    type: 'choice',
+  },
+]
+
+// Q15 — coach + omniscient (More / Less / No difference)
+const AI_ENGAGEMENT_QUESTIONS = [
+  {
+    key: 'assistance_engagement',
+    label: 'Did the assistance make you more or less willing to engage with the opposing viewpoint?',
+    options: ['More', 'Less', 'No difference'],
+    type: 'choice',
+  },
+]
+
+// Q16 — omniscient only (scale 1–5 with custom labels)
+const OMNISCIENT_BIAS_QUESTION = {
+  key: 'ai_bias',
+  label: 'Did the assistance seem to favor one side over the other?',
+  help: '1 = Strongly favored my opponent, 3 = Neutral, 5 = Strongly favored me',
+  type: 'scale',
 }
 
 export default function SurveyScreen({ person, participantName, mode, onSubmitted }) {
   const cfg = CONFIG[person]
-  const questions = mode === 'omniscient' ? [...QUESTIONS, OMNISCIENT_QUESTION] : QUESTIONS
+  const isAI = mode === 'coach' || mode === 'omniscient'
+  const isOmniscient = mode === 'omniscient'
+
+  // Build the full question list based on mode
+  const allQuestions = [
+    ...BASE_QUESTIONS,
+    ...(isAI ? AI_SCALE_QUESTIONS : []),
+    ...(isAI ? AI_YNS_QUESTIONS : []),
+    ...(isAI ? AI_ENGAGEMENT_QUESTIONS : []),
+    ...(isOmniscient ? [OMNISCIENT_BIAS_QUESTION] : []),
+  ]
 
   const [answers, setAnswers] = useState(
-    Object.fromEntries(questions.map(q => [q.key, null]))
+    Object.fromEntries(allQuestions.map(q => [q.key, q.type === 'open' ? '' : null]))
   )
   const [submitted, setSubmitted] = useState(false)
   const [loading, setLoading] = useState(false)
@@ -33,7 +83,9 @@ export default function SurveyScreen({ person, participantName, mode, onSubmitte
   }
 
   async function handleSubmit() {
-    const unanswered = questions.filter(q => answers[q.key] === null)
+    const unanswered = allQuestions
+      .filter(q => !q.condition || q.condition(answers))
+      .filter(q => q.type === 'open' ? !answers[q.key]?.trim() : answers[q.key] === null)
     if (unanswered.length > 0) {
       setError('Please answer all questions before submitting.')
       return
@@ -80,23 +132,31 @@ export default function SurveyScreen({ person, participantName, mode, onSubmitte
         </div>
 
         <div className="survey-questions">
-          {questions.map(q => (
-            <div key={q.key} className="survey-question">
-              <div className="survey-q-label">{q.label}</div>
-              <div className="survey-q-help">{q.help}</div>
+          {allQuestions.filter(q => !q.condition || q.condition(answers)).map(q => (
+          <div key={q.key} className="survey-question">
+            <div className="survey-q-label">{q.label}</div>
+            {q.type === 'scale' && (
+              <>
+                <div className="survey-q-help">{q.help}</div>
+                <div className="survey-scale">
+                  {[1,2,3,4,5].map(n => (
+                    <button key={n} className={`scale-btn ${answers[q.key] === n ? 'selected' : ''}`} onClick={() => setAnswer(q.key, n)}>{n}</button>
+                  ))}
+                </div>
+              </>
+            )}
+            {q.type === 'choice' && (
               <div className="survey-scale">
-                {[1, 2, 3, 4, 5].map(n => (
-                  <button
-                    key={n}
-                    className={`scale-btn ${answers[q.key] === n ? 'selected' : ''}`}
-                    onClick={() => setAnswer(q.key, n)}
-                  >
-                    {n}
-                  </button>
+                {q.options.map(opt => (
+                  <button key={opt} className={`scale-btn scale-btn--text ${answers[q.key] === opt ? 'selected' : ''}`} onClick={() => setAnswer(q.key, opt)}>{opt}</button>
                 ))}
               </div>
-            </div>
-          ))}
+            )}
+            {q.type === 'open' && (
+              <textarea className="survey-textarea" value={answers[q.key]} onChange={e => setAnswer(q.key, e.target.value)} placeholder="Describe in your own words..." rows={3} />
+            )}
+          </div>
+        ))}
         </div>
 
         {error && <p className="survey-error">{error}</p>}
