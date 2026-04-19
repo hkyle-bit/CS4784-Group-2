@@ -1,0 +1,9 @@
+timestamp,person,role,content,ai_reasoning
+2026-04-19 17:26:13,system,mode,Mode: Omniscient,
+,,,,
+2026-04-19 17:26:13,Kush,pre_survey_start,,
+2026-04-19 17:26:13,Kush,pre_survey_position_strength,3,
+2026-04-19 17:26:13,Kush,pre_survey_openness_to_change,4,
+2026-04-19 17:26:13,Kush,pre_survey_argument_confidence,5,
+2026-04-19 17:26:13,Kush,pre_survey_opposing_familiarity,3,
+2026-04-19 17:26:13,Kush,pre_survey_expects_change,Maybe,

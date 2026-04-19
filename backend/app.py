@@ -1,8 +1,10 @@
 from flask import Flask, request, jsonify
 from flask_cors import CORS
+from flask_sqlalchemy import SQLAlchemy
 from groq import Groq
 import os
-import csv
+import json
+import uuid
 from datetime import datetime
 from dotenv import load_dotenv
 
@@ -10,6 +12,52 @@ load_dotenv()
 
 app = Flask(__name__)
 CORS(app)
+
+# Database configuration
+database_url = os.environ.get("DATABASE_URL", "sqlite:///debate.db")
+if database_url.startswith("postgres://"):
+    database_url = database_url.replace("postgres://", "postgresql://", 1)
+app.config["SQLALCHEMY_DATABASE_URI"] = database_url
+app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
+
+db = SQLAlchemy(app)
+
+# Database Models
+class DebateSession(db.Model):
+    __tablename__ = 'debate_sessions'
+    id = db.Column(db.Integer, primary_key=True)
+    session_id = db.Column(db.String(50), unique=True, nullable=False)
+    mode = db.Column(db.String(20), nullable=False)
+    person_a_name = db.Column(db.String(100), default='Person A')
+    person_b_name = db.Column(db.String(100), default='Person B')
+    max_messages = db.Column(db.Integer, default=10)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    ended_at = db.Column(db.DateTime, nullable=True)
+    messages = db.relationship('DebateMessage', backref='session', lazy=True, cascade='all, delete-orphan')
+    surveys = db.relationship('Survey', backref='session', lazy=True, cascade='all, delete-orphan')
+
+class DebateMessage(db.Model):
+    __tablename__ = 'debate_messages'
+    id = db.Column(db.Integer, primary_key=True)
+    session_id = db.Column(db.Integer, db.ForeignKey('debate_sessions.id'), nullable=False)
+    person = db.Column(db.String(50), nullable=False)
+    role = db.Column(db.String(50), nullable=False)
+    content = db.Column(db.Text, nullable=False)
+    ai_reasoning = db.Column(db.Text, default='')
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+
+class Survey(db.Model):
+    __tablename__ = 'surveys'
+    id = db.Column(db.Integer, primary_key=True)
+    session_id = db.Column(db.Integer, db.ForeignKey('debate_sessions.id'), nullable=False)
+    person = db.Column(db.String(50), nullable=False)
+    survey_type = db.Column(db.String(20), nullable=False)
+    responses = db.Column(db.JSON, nullable=False)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+
+# Initialize database
+with app.app_context():
+    db.create_all()
 
 client = Groq(api_key=os.environ["GROQ_API_KEY"])
 MODEL = "llama-3.3-70b-versatile"
@@ -22,46 +70,61 @@ debate_state = {
     "shared": [],
     "mode": "coach",
     "nudge_target": "b",
-    "csv_file": None,
     "names": {"a": "Person A", "b": "Person B"},
     "message_counts": {"a": 0, "b": 0},
     "max_messages": 10,
     "debate_ended": False,
     "surveys": {"a": None, "b": None},
-    "pre_surveys": {"a": None, "b": None},          # NEW
-    "pre_survey_done": {"a": False, "b": False},    # NEW
+    "pre_surveys": {"a": None, "b": None},
+    "pre_survey_done": {"a": False, "b": False},
 }
 
-# ── CSV logging ───────────────────────────────────────────────────────────────
 
-def get_csv_file():
-    if debate_state["csv_file"] is None:
-        os.makedirs("logs", exist_ok=True)
-        timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-        mode_label = {"none": "No AI", "coach": "Coach", "omniscient": "Omniscient"}.get(debate_state["mode"], debate_state["mode"])
-        debate_state["csv_file"] = f"logs/debate_{mode_label}_{timestamp}.csv"
-        with open(debate_state["csv_file"], "w", newline="") as f:
-            writer = csv.writer(f)
-            writer.writerow(["timestamp", "person", "role", "content", "ai_reasoning"])
-            writer.writerow([datetime.now().strftime("%Y-%m-%d %H:%M:%S"), "system", "mode", f"Mode: {mode_label}", ""])
-    return debate_state["csv_file"]
+# Global session tracking
+current_session = {"id": None, "db_id": None}
 
-def log_to_csv(person: str, role: str, content: str, ai_reasoning: str = ""):
-    filepath = get_csv_file()
-    display_name = debate_state["names"].get(person, person)
-    with open(filepath, "a", newline="") as f:
-        writer = csv.writer(f)
-        writer.writerow([datetime.now().strftime("%Y-%m-%d %H:%M:%S"), display_name, role, content, ai_reasoning])
+def init_debate_session(mode: str):
+    """Initialize a new debate session in the database"""
+    session_id = str(uuid.uuid4())[:12]
+    db_session = DebateSession(
+        session_id=session_id,
+        mode=mode,
+        max_messages=debate_state["max_messages"]
+    )
+    db.session.add(db_session)
+    db.session.commit()
+    current_session["id"] = session_id
+    current_session["db_id"] = db_session.id
+    return session_id
 
-def log_survey_to_csv(person: str, survey: dict, survey_type: str = "post"):  # NEW: survey_type param
-    filepath = get_csv_file()
-    display_name = debate_state["names"].get(person, person)
-    with open(filepath, "a", newline="") as f:
-        writer = csv.writer(f)
-        writer.writerow(["", "", "", "", ""])
-        writer.writerow([datetime.now().strftime("%Y-%m-%d %H:%M:%S"), display_name, f"{survey_type}_survey_start", "", ""])
-        for key, value in survey.items():
-            writer.writerow([datetime.now().strftime("%Y-%m-%d %H:%M:%S"), display_name, f"{survey_type}_survey_{key}", value, ""])
+def log_to_db(person: str, role: str, content: str, ai_reasoning: str = ""):
+    """Log message to database"""
+    if not current_session["db_id"]:
+        return
+    message = DebateMessage(
+        session_id=current_session["db_id"],
+        person=person,
+        role=role,
+        content=content,
+        ai_reasoning=ai_reasoning
+    )
+    db.session.add(message)
+    db.session.commit()
+
+def log_survey_to_db(person: str, survey: dict, survey_type: str = "post"):
+    """Log survey responses to database"""
+    if not current_session["db_id"]:
+        return
+    survey_record = Survey(
+        session_id=current_session["db_id"],
+        person=person,
+        survey_type=survey_type,
+        responses=survey
+    )
+    db.session.add(survey_record)
+    db.session.commit()
+
+# ── Database logging ──────────────────────────────────────────────────────────
 
 # ── System prompts ─────────────────────────────────────────────────────────────
 
@@ -236,6 +299,17 @@ def get_manual_nudge(recipient: str):
 
 # ── Routes ────────────────────────────────────────────────────────────────────
 
+@app.route("/", methods=["GET"])
+def index():
+    return jsonify({"status": "healthy", "message": "Debate Coach Backend API", "session": current_session["id"]})
+
+@app.route("/api/init", methods=["POST"])
+def init_session():
+    data = request.json
+    mode = data.get("mode", "coach")
+    session_id = init_debate_session(mode)
+    return jsonify({"session_id": session_id, "status": "initialized"})
+
 @app.route("/api/register", methods=["POST"])
 def register():
     data = request.json
@@ -260,7 +334,7 @@ def submit_pre_survey(person):
     data = request.json
     debate_state["pre_surveys"][person] = data
     debate_state["pre_survey_done"][person] = True
-    log_survey_to_csv(person, data, survey_type="pre")
+    log_survey_to_db(person, data, survey_type="pre")
     return jsonify({"status": "pre_survey submitted"})
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -277,7 +351,7 @@ def chat_a():
     debate_state["message_counts"]["a"] += 1
     debate_state["shared"].append({"person": "a", "role": "user", "content": user_message})
     debate_state["person_a"]["history"].append({"role": "user", "content": user_message})
-    log_to_csv("a", "user", user_message)
+    log_to_db("a", "user", user_message)
 
     # Auto-response logic
     debate_state["person_a"]["turns_since_ai"] += 1
@@ -287,7 +361,7 @@ def chat_a():
     if auto_reply:
         debate_state["person_a"]["turns_since_ai"] = 0
         debate_state["person_a"]["history"].append({"role": "assistant", "content": auto_reply})
-        log_to_csv("coach_a" if debate_state["mode"] == "coach" else "arbiter", "auto_response", auto_reply, auto_reasoning or "")
+        log_to_db("coach_a" if debate_state["mode"] == "coach" else "arbiter", "auto_response", auto_reply, auto_reasoning or "")
 
     # In omniscient mode, also trigger for person B after A speaks
     if debate_state["mode"] == "omniscient":
@@ -297,7 +371,7 @@ def chat_a():
         if omni_b_reply:
             debate_state["person_b"]["turns_since_ai"] = 0
             debate_state["shared"].append({"person": "arbiter", "role": "auto_side", "target": "b", "content": omni_b_reply})
-            log_to_csv("arbiter", "auto_response_to_b", omni_b_reply, omni_b_reasoning or "")
+            log_to_db("arbiter", "auto_response_to_b", omni_b_reply, omni_b_reasoning or "")
 
     return jsonify({
         "mode": debate_state["mode"],
@@ -318,7 +392,7 @@ def chat_b():
     debate_state["message_counts"]["b"] += 1
     debate_state["shared"].append({"person": "b", "role": "user", "content": user_message})
     debate_state["person_b"]["history"].append({"role": "user", "content": user_message})
-    log_to_csv("b", "user", user_message)
+    log_to_db("b", "user", user_message)
 
     debate_state["person_b"]["turns_since_ai"] += 1
     force = debate_state["person_b"]["turns_since_ai"] >= 3
@@ -327,7 +401,7 @@ def chat_b():
     if auto_reply:
         debate_state["person_b"]["turns_since_ai"] = 0
         debate_state["person_b"]["history"].append({"role": "assistant", "content": auto_reply})
-        log_to_csv("coach_b" if debate_state["mode"] == "coach" else "arbiter", "auto_response", auto_reply, auto_reasoning or "")
+        log_to_db("coach_b" if debate_state["mode"] == "coach" else "arbiter", "auto_response", auto_reply, auto_reasoning or "")
 
     if debate_state["mode"] == "omniscient":
         debate_state["person_a"]["turns_since_ai"] += 1
@@ -336,7 +410,7 @@ def chat_b():
         if omni_a_reply:
             debate_state["person_a"]["turns_since_ai"] = 0
             debate_state["shared"].append({"person": "arbiter", "role": "auto_side", "target": "a", "content": omni_a_reply})
-            log_to_csv("arbiter", "auto_response_to_a", omni_a_reply, omni_a_reasoning or "")
+            log_to_db("arbiter", "auto_response_to_a", omni_a_reply, omni_a_reasoning or "")
 
     return jsonify({
         "mode": debate_state["mode"],
@@ -363,7 +437,7 @@ def side_panel(person):
         debate_state[f"person_{person}"]["history"].append({"role": "user", "content": user_message})
         debate_state[f"person_{person}"]["history"].append({"role": "assistant", "content": reply})
         debate_state[f"person_{person}"]["turns_since_ai"] = 0
-        log_to_csv(f"coach_{person}", "side_panel", reply, reasoning)
+        log_to_db(f"coach_{person}", "side_panel", reply, reasoning)
         return jsonify({"reply": reply, "reasoning": reasoning})
 
     else:
@@ -380,13 +454,13 @@ def side_panel(person):
         raw = response.choices[0].message.content
         reasoning, reply = parse_reasoning(raw)
         debate_state[f"person_{person}"]["turns_since_ai"] = 0
-        log_to_csv("arbiter", f"side_panel_to_{person}", reply, reasoning)
+        log_to_db("arbiter", f"side_panel_to_{person}", reply, reasoning)
         return jsonify({"reply": reply, "reasoning": reasoning})
 
 @app.route("/api/end", methods=["POST"])
 def end_debate():
     debate_state["debate_ended"] = True
-    log_to_csv("system", "debate_ended", "Debate ended by participant", "")
+    log_to_db("system", "debate_ended", "Debate ended by participant", "")
     return jsonify({"status": "ended"})
 
 @app.route("/api/survey/<person>", methods=["POST"])
@@ -395,7 +469,7 @@ def submit_survey(person):
         return jsonify({"error": "Invalid person"}), 400
     data = request.json
     debate_state["surveys"][person] = data
-    log_survey_to_csv(person, data)
+    log_survey_to_db(person, data)
     return jsonify({"status": "survey submitted"})
 
 @app.route("/api/arbiter/<person>", methods=["POST"])
@@ -427,6 +501,8 @@ def update_settings():
     data = request.json
     if "mode" in data:
         debate_state["mode"] = data["mode"]
+        # Initialize new session when mode changes
+        init_debate_session(data["mode"])
     if "nudge_target" in data:
         debate_state["nudge_target"] = data["nudge_target"]
     return jsonify({"mode": debate_state["mode"], "nudge_target": debate_state["nudge_target"]})
@@ -460,7 +536,7 @@ def omniscient_persuade():
     response = client.chat.completions.create(model=MODEL, messages=messages, max_tokens=300)
     raw = response.choices[0].message.content
     reasoning, reply = parse_reasoning(raw)
-    log_to_csv("arbiter", f"manual_persuade_to_{target}", reply, reasoning)
+    log_to_db("arbiter", f"manual_persuade_to_{target}", reply, reasoning)
     return jsonify({
         "reply": reply,
         "target": target,
@@ -479,12 +555,12 @@ def get_state():
         "b_message_count": len([m for m in debate_state["person_b"]["history"] if m["role"] == "user"]),
         "mode": debate_state["mode"],
         "nudge_target": debate_state["nudge_target"],
-        "csv_file": debate_state["csv_file"],
         "names": debate_state["names"],
         "message_counts": debate_state["message_counts"],
         "max_messages": debate_state["max_messages"],
         "debate_ended": debate_state["debate_ended"],
-        "pre_survey_done": debate_state["pre_survey_done"],  # NEW
+        "pre_survey_done": debate_state["pre_survey_done"],
+        "session_id": current_session["id"],
     })
 
 @app.route("/api/reset", methods=["POST"])
@@ -492,13 +568,14 @@ def reset():
     debate_state["person_a"] = {"history": [], "turns_since_ai": 0}
     debate_state["person_b"] = {"history": [], "turns_since_ai": 0}
     debate_state["shared"] = []
-    debate_state["csv_file"] = None
     debate_state["names"] = {"a": "Person A", "b": "Person B"}
     debate_state["message_counts"] = {"a": 0, "b": 0}
     debate_state["debate_ended"] = False
     debate_state["surveys"] = {"a": None, "b": None}
-    debate_state["pre_surveys"] = {"a": None, "b": None}        # NEW
-    debate_state["pre_survey_done"] = {"a": False, "b": False}  # NEW
+    debate_state["pre_surveys"] = {"a": None, "b": None}
+    debate_state["pre_survey_done"] = {"a": False, "b": False}
+    # Initialize new session
+    init_debate_session(debate_state["mode"])
     return jsonify({"status": "reset"})
 
 if __name__ == "__main__":
